@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useEffect, useState } from 'react';
+import { use, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, Car, CreditCard, Download, Eye, FileText, Plus, Save, Search, Trash2, Upload } from 'lucide-react';
@@ -9,10 +9,14 @@ import UnitFormModal from '@/components/UnitFormModal';
 import PaymentFormModal from '@/components/PaymentFormModal';
 import DocumentUploadModal from '@/components/DocumentUploadModal';
 import DocumentViewerModal from '@/components/DocumentViewerModal';
+import { useAuthUser } from '@/lib/use-auth-user';
+import { useAutoRefresh } from '@/lib/use-auto-refresh';
 
 export default function MemberDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
+  const { role } = useAuthUser();
+  const canEdit = role === 'Administrator' || role === 'Editor';
   const [member, setMember] = useState<Member | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -23,21 +27,40 @@ export default function MemberDetailPage({ params }: { params: Promise<{ id: str
   const [selectedDocument, setSelectedDocument] = useState<DocumentAttachment | null>(null);
   const [documentSearch, setDocumentSearch] = useState('');
   const [form, setForm] = useState({ full_name: '', id_number: '', authorized_driver_ids: '' });
+  const memberRef = useRef(member);
+  const formRef = useRef(form);
+  memberRef.current = member;
+  formRef.current = form;
 
-  async function loadMember() {
+  async function loadMember(preserveUnsavedForm = false) {
     const response = await fetch(`/api/members/${id}`);
     if (!response.ok) {
       setMember(null);
+      memberRef.current = null;
       setLoading(false);
       return;
     }
     const data: Member = await response.json();
+    const previousMember = memberRef.current;
     setMember(data);
-    setForm({
+    memberRef.current = data;
+    const currentForm = formRef.current;
+    const hasUnsavedChanges = previousMember && (
+      currentForm.full_name !== (previousMember.full_name || '') ||
+      currentForm.id_number !== (previousMember.id_number || '') ||
+      currentForm.authorized_driver_ids !== (previousMember.authorized_driver_ids || '')
+    );
+    if (preserveUnsavedForm && hasUnsavedChanges) {
+      setLoading(false);
+      return;
+    }
+    const nextForm = {
       full_name: data.full_name || '',
       id_number: data.id_number || '',
       authorized_driver_ids: data.authorized_driver_ids || '',
-    });
+    };
+    setForm(nextForm);
+    formRef.current = nextForm;
     setLoading(false);
   }
 
@@ -47,6 +70,11 @@ export default function MemberDetailPage({ params }: { params: Promise<{ id: str
       setLoading(false);
     });
   }, [id]);
+  useAutoRefresh(
+    () => loadMember(true),
+    30_000,
+    !saving && !unitModalOpen && !paymentModalOpen && !documentUploadOpen && !selectedDocument
+  );
 
   async function saveMember(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -58,7 +86,7 @@ export default function MemberDetailPage({ params }: { params: Promise<{ id: str
         body: JSON.stringify(form),
       });
       if (!response.ok) throw new Error('Could not update member record');
-      await loadMember();
+      await loadMember(true);
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Could not update member record');
     } finally {
@@ -73,7 +101,7 @@ export default function MemberDetailPage({ params }: { params: Promise<{ id: str
       alert('Could not delete vehicle record');
       return;
     }
-    await loadMember();
+    await loadMember(true);
   }
 
   async function deleteMember() {
@@ -104,7 +132,7 @@ export default function MemberDetailPage({ params }: { params: Promise<{ id: str
         const data = await response.json().catch(() => null);
         throw new Error(data?.error || 'Could not delete document');
       }
-      await loadMember();
+      await loadMember(true);
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Could not delete document');
     }
@@ -125,9 +153,11 @@ export default function MemberDetailPage({ params }: { params: Promise<{ id: str
             <p className="text-sm text-slate-500">Member, vehicle, renewal, and payment records</p>
           </div>
         </div>
-        <button onClick={deleteMember} className="inline-flex items-center gap-2 rounded-lg border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700">
-          <Trash2 className="h-4 w-4" /> Delete
-        </button>
+        {canEdit && (
+          <button onClick={deleteMember} className="inline-flex items-center gap-2 rounded-lg border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700">
+            <Trash2 className="h-4 w-4" /> Delete
+          </button>
+        )}
       </header>
 
       <form onSubmit={saveMember} className="space-y-4 rounded-xl border border-slate-200 bg-white p-5">
@@ -135,22 +165,22 @@ export default function MemberDetailPage({ params }: { params: Promise<{ id: str
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="text-sm font-medium text-slate-700">
             Name *
-            <input required value={form.full_name} onChange={(event) => setForm({ ...form, full_name: event.target.value })} className={`${inputClass} mt-1`} />
+            <input required disabled={!canEdit} value={form.full_name} onChange={(event) => setForm({ ...form, full_name: event.target.value })} className={`${inputClass} mt-1 disabled:bg-slate-50`} />
           </label>
           <label className="text-sm font-medium text-slate-700">
             ID Number
-            <input value={form.id_number} onChange={(event) => setForm({ ...form, id_number: event.target.value })} className={`${inputClass} mt-1`} />
+            <input disabled={!canEdit} value={form.id_number} onChange={(event) => setForm({ ...form, id_number: event.target.value })} className={`${inputClass} mt-1 disabled:bg-slate-50`} />
           </label>
         </div>
         <label className="block text-sm font-medium text-slate-700">
           Other IDs (authorized drivers)
-          <textarea rows={3} value={form.authorized_driver_ids} onChange={(event) => setForm({ ...form, authorized_driver_ids: event.target.value })} className={`${inputClass} mt-1`} />
+          <textarea disabled={!canEdit} rows={3} value={form.authorized_driver_ids} onChange={(event) => setForm({ ...form, authorized_driver_ids: event.target.value })} className={`${inputClass} mt-1 disabled:bg-slate-50`} />
         </label>
-        <div className="flex justify-end">
+        {canEdit && <div className="flex justify-end">
           <button disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
             <Save className="h-4 w-4" /> {saving ? 'Saving…' : 'Save Member'}
           </button>
-        </div>
+        </div>}
       </form>
 
       <section className="space-y-4">
@@ -159,9 +189,9 @@ export default function MemberDetailPage({ params }: { params: Promise<{ id: str
             <h2 className="flex items-center gap-2 font-semibold text-slate-900"><Car className="h-4 w-4" /> Vehicle and renewals</h2>
             <p className="text-xs text-slate-500">Plate, engine, chassis, MV file, case, PAMI, and LTO details</p>
           </div>
-          <button onClick={() => { setEditingUnit(null); setUnitModalOpen(true); }} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white">
+          {canEdit && <button onClick={() => { setEditingUnit(null); setUnitModalOpen(true); }} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white">
             <Plus className="h-4 w-4" /> Add Vehicle
-          </button>
+          </button>}
         </div>
         {(member.units || []).length === 0 ? (
           <p className="rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">No vehicle record yet.</p>
@@ -171,10 +201,10 @@ export default function MemberDetailPage({ params }: { params: Promise<{ id: str
               <article key={unit.id} className="space-y-3 rounded-xl border border-slate-200 bg-white p-5">
                 <div className="flex items-center justify-between">
                   <h3 className="font-bold text-slate-900">{unit.plate_number}</h3>
-                  <div className="flex gap-2">
+                  {canEdit && <div className="flex gap-2">
                     <button onClick={() => { setEditingUnit(unit); setUnitModalOpen(true); }} className="text-xs font-semibold text-sky-700">Edit</button>
                     <button onClick={() => deleteUnit(unit)} aria-label={`Delete ${unit.plate_number}`} className="text-slate-400 hover:text-rose-600"><Trash2 className="h-4 w-4" /></button>
-                  </div>
+                  </div>}
                 </div>
                 <dl className="grid grid-cols-2 gap-3 text-xs">
                   <div><dt className="text-slate-500">Engine</dt><dd className="font-medium">{unit.engine_number || '—'}</dd></div>
@@ -196,9 +226,9 @@ export default function MemberDetailPage({ params }: { params: Promise<{ id: str
             <h2 className="flex items-center gap-2 font-semibold text-slate-900"><CreditCard className="h-4 w-4" /> Payment history</h2>
             <p className="text-xs text-slate-500">Membership, franchise processing, monthly dues, GPS dues, and other payments</p>
           </div>
-          <button onClick={() => setPaymentModalOpen(true)} className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white">
+          {canEdit && <button onClick={() => setPaymentModalOpen(true)} className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white">
             <Plus className="h-4 w-4" /> Record Payment
-          </button>
+          </button>}
         </div>
         <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
           <table className="w-full min-w-[560px] text-left text-sm">
@@ -229,9 +259,9 @@ export default function MemberDetailPage({ params }: { params: Promise<{ id: str
             </h2>
             <p className="text-xs text-slate-500">Saved on this computer; search, preview, or download documents.</p>
           </div>
-          <button onClick={() => setDocumentUploadOpen(true)} className="inline-flex items-center gap-2 self-start rounded-lg bg-sky-600 px-3 py-2 text-xs font-semibold text-white">
+          {canEdit && <button onClick={() => setDocumentUploadOpen(true)} className="inline-flex items-center gap-2 self-start rounded-lg bg-sky-600 px-3 py-2 text-xs font-semibold text-white">
             <Upload className="h-4 w-4" /> Add Document
-          </button>
+          </button>}
         </div>
 
         {(member.documents || []).length > 0 && (
@@ -276,7 +306,7 @@ export default function MemberDetailPage({ params }: { params: Promise<{ id: str
                       <td className="whitespace-nowrap px-4 py-3 text-right">
                         <button onClick={() => setSelectedDocument(document)} aria-label={`View ${document.title}`} className="mr-3 text-slate-500 hover:text-sky-700"><Eye className="inline h-4 w-4" /></button>
                         <a href={downloadUrl} aria-label={`Download ${document.title}`} className="mr-3 text-slate-500 hover:text-sky-700"><Download className="inline h-4 w-4" /></a>
-                        <button onClick={() => deleteDocument(document)} aria-label={`Delete ${document.title}`} className="text-slate-400 hover:text-rose-600"><Trash2 className="inline h-4 w-4" /></button>
+                        {canEdit && <button onClick={() => deleteDocument(document)} aria-label={`Delete ${document.title}`} className="text-slate-400 hover:text-rose-600"><Trash2 className="inline h-4 w-4" /></button>}
                       </td>
                     </tr>
                   );
@@ -287,9 +317,9 @@ export default function MemberDetailPage({ params }: { params: Promise<{ id: str
         )}
       </section>
 
-      <UnitFormModal memberId={member.id} initialUnit={editingUnit} isOpen={unitModalOpen} onClose={() => setUnitModalOpen(false)} onSuccess={loadMember} />
-      <PaymentFormModal memberId={member.id} isOpen={paymentModalOpen} onClose={() => setPaymentModalOpen(false)} onSuccess={loadMember} />
-      <DocumentUploadModal memberId={member.id} units={member.units} isOpen={documentUploadOpen} onClose={() => setDocumentUploadOpen(false)} onSuccess={loadMember} />
+      <UnitFormModal memberId={member.id} initialUnit={editingUnit} isOpen={unitModalOpen} onClose={() => setUnitModalOpen(false)} onSuccess={() => loadMember(true)} />
+      <PaymentFormModal memberId={member.id} isOpen={paymentModalOpen} onClose={() => setPaymentModalOpen(false)} onSuccess={() => loadMember(true)} />
+      <DocumentUploadModal memberId={member.id} units={member.units} isOpen={documentUploadOpen} onClose={() => setDocumentUploadOpen(false)} onSuccess={() => loadMember(true)} />
       <DocumentViewerModal document={selectedDocument} isOpen={Boolean(selectedDocument)} onClose={() => setSelectedDocument(null)} />
     </div>
   );

@@ -15,6 +15,7 @@ import {
   initialPayments,
   initialDocuments,
 } from './sample-data';
+import type { AppRole } from './auth-policy';
 
 const LOCAL_DB_FILE = path.join(process.cwd(), 'data', 'local-db.json');
 
@@ -44,6 +45,34 @@ interface LocalDbStore {
   units: Unit[];
   payments: Payment[];
   documents: DocumentAttachment[];
+  authUsers?: AuthUserRecord[];
+  authSessions?: AuthSessionRecord[];
+  authBootstrapComplete?: boolean;
+}
+
+export interface AuthUserRecord {
+  id: string;
+  email: string;
+  password_hash: string;
+  role: AppRole;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AuthSessionRecord {
+  id: string;
+  user_id: string;
+  token_hash: string;
+  expires_at: string;
+  created_at: string;
+}
+
+export interface AuthenticatedUser {
+  id: string;
+  email: string;
+  role: AppRole;
+  is_active: boolean;
 }
 
 function readLocalDb(): LocalDbStore {
@@ -66,7 +95,12 @@ function readLocalDb(): LocalDbStore {
       !Array.isArray(parsed.payments) || !Array.isArray(parsed.documents)) {
     throw new Error(`Local database at ${LOCAL_DB_FILE} has an invalid structure.`);
   }
-  return parsed as LocalDbStore;
+  return {
+    ...parsed,
+    authUsers: Array.isArray(parsed.authUsers) ? parsed.authUsers : [],
+    authSessions: Array.isArray(parsed.authSessions) ? parsed.authSessions : [],
+    authBootstrapComplete: parsed.authBootstrapComplete === true,
+  } as LocalDbStore;
 }
 
 function writeLocalDb(data: LocalDbStore): void {
@@ -177,6 +211,38 @@ export async function initNeonDatabase(): Promise<{ success: boolean; message: s
       );
     `;
 
+    await sql`
+      CREATE TABLE IF NOT EXISTS app_users (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL CHECK (role IN ('Administrator', 'Editor', 'Viewer')),
+        is_active BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
+    await sql`
+      CREATE TABLE IF NOT EXISTS app_sessions (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        token_hash TEXT NOT NULL UNIQUE,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
+    await sql`
+      CREATE TABLE IF NOT EXISTS app_auth_settings (
+        id SMALLINT PRIMARY KEY CHECK (id = 1),
+        bootstrap_completed BOOLEAN NOT NULL DEFAULT FALSE,
+        active_admin_count INTEGER NOT NULL DEFAULT 0 CHECK (active_admin_count >= 0)
+      );
+    `;
+    await sql`
+      INSERT INTO app_auth_settings (id, bootstrap_completed, active_admin_count)
+      VALUES (1, FALSE, 0) ON CONFLICT (id) DO NOTHING
+    `;
+
     neonInitialized = true;
     return { success: true, message: 'Neon PostgreSQL tables initialized successfully!' };
   } catch (error: any) {
@@ -187,8 +253,307 @@ export async function initNeonDatabase(): Promise<{ success: boolean; message: s
 
 async function ensureNeonReady() {
   if (!neonInitialized && isNeonConfigured()) {
-    await initNeonDatabase();
+    const result = await initNeonDatabase();
+    if (!result.success) throw new Error(result.message);
   }
+}
+
+async function ensureAuthStorageReady() {
+  if (isNeonConfigured()) {
+    await ensureNeonReady();
+    return;
+  }
+  readLocalDb();
+}
+
+function publicAuthUser(user: AuthUserRecord): AuthenticatedUser {
+  return { id: user.id, email: user.email, role: user.role, is_active: user.is_active };
+}
+
+export async function authSetupRequired(): Promise<boolean> {
+  await ensureAuthStorageReady();
+  if (isNeonConfigured()) {
+    const sql = getNeonSql();
+    const rows = await sql`SELECT EXISTS (SELECT 1 FROM app_users) AS has_users`;
+    return !rows[0].has_users;
+  }
+  return (readLocalDb().authUsers || []).length === 0;
+}
+
+export async function createBootstrapAdmin(
+  email: string,
+  passwordHash: string
+): Promise<AuthenticatedUser | null> {
+  await ensureAuthStorageReady();
+  const id = randomUUID();
+  if (isNeonConfigured()) {
+    const sql = getNeonSql();
+    const rows = await sql`
+      WITH claimed AS (
+        UPDATE app_auth_settings
+        SET bootstrap_completed = TRUE, active_admin_count = 1
+        WHERE id = 1 AND bootstrap_completed = FALSE
+          AND NOT EXISTS (SELECT 1 FROM app_users)
+        RETURNING id
+      )
+      INSERT INTO app_users (id, email, password_hash, role, is_active)
+      SELECT ${id}, ${email}, ${passwordHash}, 'Administrator', TRUE FROM claimed
+      RETURNING id, email, role, is_active, created_at, updated_at
+    `;
+    return rows[0] ? publicAuthUser(rows[0] as AuthUserRecord) : null;
+  }
+
+  const db = readLocalDb();
+  if (db.authBootstrapComplete || (db.authUsers || []).length > 0) return null;
+  const now = new Date().toISOString();
+  const user: AuthUserRecord = {
+    id,
+    email,
+    password_hash: passwordHash,
+    role: 'Administrator',
+    is_active: true,
+    created_at: now,
+    updated_at: now,
+  };
+  db.authUsers = [user];
+  db.authBootstrapComplete = true;
+  writeLocalDb(db);
+  return publicAuthUser(user);
+}
+
+export async function getAuthUserByEmail(email: string): Promise<AuthUserRecord | null> {
+  await ensureAuthStorageReady();
+  if (isNeonConfigured()) {
+    const sql = getNeonSql();
+    const rows = await sql`SELECT * FROM app_users WHERE email = ${email} LIMIT 1`;
+    return rows[0] ? rows[0] as unknown as AuthUserRecord : null;
+  }
+  return (readLocalDb().authUsers || []).find((user) => user.email === email) || null;
+}
+
+export async function getAuthUserById(id: string): Promise<AuthenticatedUser | null> {
+  await ensureAuthStorageReady();
+  if (isNeonConfigured()) {
+    const sql = getNeonSql();
+    const rows = await sql`
+      SELECT id, email, role, is_active FROM app_users WHERE id = ${id} LIMIT 1
+    `;
+    return rows[0] ? publicAuthUser(rows[0] as AuthUserRecord) : null;
+  }
+  const user = (readLocalDb().authUsers || []).find((item) => item.id === id);
+  return user ? publicAuthUser(user) : null;
+}
+
+export async function createAuthSession(
+  userId: string,
+  tokenHash: string,
+  expiresAt: string
+): Promise<void> {
+  await ensureAuthStorageReady();
+  const id = randomUUID();
+  if (isNeonConfigured()) {
+    const sql = getNeonSql();
+    const rows = await sql`
+      INSERT INTO app_sessions (id, user_id, token_hash, expires_at)
+      SELECT ${id}, id, ${tokenHash}, ${expiresAt}
+      FROM app_users WHERE id = ${userId} AND is_active = TRUE
+      RETURNING id
+    `;
+    if (!rows.length) throw new Error('Cannot create a session for an inactive user.');
+    return;
+  }
+  const db = readLocalDb();
+  if (!(db.authUsers || []).some((user) => user.id === userId && user.is_active)) {
+    throw new Error('Cannot create a session for an inactive user.');
+  }
+  db.authSessions = (db.authSessions || []).filter(
+    (session) => Date.parse(session.expires_at) > Date.now()
+  );
+  db.authSessions.push({
+    id,
+    user_id: userId,
+    token_hash: tokenHash,
+    expires_at: expiresAt,
+    created_at: new Date().toISOString(),
+  });
+  writeLocalDb(db);
+}
+
+export async function getAuthenticatedSession(tokenHash: string): Promise<AuthenticatedUser | null> {
+  await ensureAuthStorageReady();
+  if (isNeonConfigured()) {
+    const sql = getNeonSql();
+    const rows = await sql`
+      SELECT u.id, u.email, u.role, u.is_active
+      FROM app_sessions s JOIN app_users u ON u.id = s.user_id
+      WHERE s.token_hash = ${tokenHash} AND s.expires_at > NOW() AND u.is_active = TRUE
+      LIMIT 1
+    `;
+    return rows[0] ? publicAuthUser(rows[0] as AuthUserRecord) : null;
+  }
+  const db = readLocalDb();
+  const session = (db.authSessions || []).find(
+    (item) => item.token_hash === tokenHash && Date.parse(item.expires_at) > Date.now()
+  );
+  const user = session && (db.authUsers || []).find((item) => item.id === session.user_id && item.is_active);
+  return user ? publicAuthUser(user) : null;
+}
+
+export async function deleteAuthSession(tokenHash: string): Promise<void> {
+  await ensureAuthStorageReady();
+  if (isNeonConfigured()) {
+    const sql = getNeonSql();
+    await sql`DELETE FROM app_sessions WHERE token_hash = ${tokenHash}`;
+    return;
+  }
+  const db = readLocalDb();
+  db.authSessions = (db.authSessions || []).filter((session) => session.token_hash !== tokenHash);
+  writeLocalDb(db);
+}
+
+export async function listAuthUsers(): Promise<AuthenticatedUser[]> {
+  await ensureAuthStorageReady();
+  if (isNeonConfigured()) {
+    const sql = getNeonSql();
+    const rows = await sql`
+      SELECT id, email, role, is_active FROM app_users ORDER BY created_at ASC
+    `;
+    return rows.map((user) => publicAuthUser(user as AuthUserRecord));
+  }
+  return (readLocalDb().authUsers || []).map(publicAuthUser);
+}
+
+export async function createAuthUser(
+  email: string,
+  passwordHash: string,
+  role: AppRole
+): Promise<AuthenticatedUser> {
+  await ensureAuthStorageReady();
+  const id = randomUUID();
+  if (isNeonConfigured()) {
+    const sql = getNeonSql();
+    const rows = await sql`
+      WITH created AS (
+        INSERT INTO app_users (id, email, password_hash, role, is_active)
+        VALUES (${id}, ${email}, ${passwordHash}, ${role}, TRUE)
+        RETURNING id, email, role, is_active, created_at, updated_at
+      ), counted AS (
+        UPDATE app_auth_settings
+        SET active_admin_count = active_admin_count +
+          (SELECT COUNT(*)::INTEGER FROM created WHERE role = 'Administrator' AND is_active = TRUE)
+        WHERE id = 1
+      )
+      SELECT * FROM created
+    `;
+    if (!rows[0]) throw new Error('Could not create user.');
+    return publicAuthUser(rows[0] as unknown as AuthUserRecord);
+  }
+  const db = readLocalDb();
+  const users = db.authUsers || [];
+  if (users.some((user) => user.email === email)) throw new Error('An account with this email already exists.');
+  const now = new Date().toISOString();
+  const user: AuthUserRecord = {
+    id, email, password_hash: passwordHash, role, is_active: true, created_at: now, updated_at: now,
+  };
+  db.authUsers = [...users, user];
+  writeLocalDb(db);
+  return publicAuthUser(user);
+}
+
+export async function updateAuthUser(
+  id: string,
+  updates: { role?: AppRole; is_active?: boolean; password_hash?: string }
+): Promise<AuthenticatedUser | null> {
+  await ensureAuthStorageReady();
+  const current = isNeonConfigured()
+    ? await getAuthUserWithPassword(id)
+    : (readLocalDb().authUsers || []).find((user) => user.id === id) || null;
+  if (!current) return null;
+  const nextRole = updates.role ?? current.role;
+  const nextActive = updates.is_active ?? current.is_active;
+  const removeAdmin = current.role === 'Administrator' && current.is_active &&
+    (nextRole !== 'Administrator' || !nextActive);
+  const addAdmin = !(current.role === 'Administrator' && current.is_active) &&
+    nextRole === 'Administrator' && nextActive;
+
+  if (isNeonConfigured()) {
+    const sql = getNeonSql();
+    let rows: Record<string, unknown>[];
+    if (removeAdmin) {
+      rows = await sql`
+        WITH target AS (
+          SELECT id FROM app_users
+          WHERE id = ${id} AND role = 'Administrator' AND is_active = TRUE
+          FOR UPDATE
+        ), guarded AS (
+          UPDATE app_auth_settings SET active_admin_count = active_admin_count - 1
+          WHERE id = 1 AND active_admin_count > 1
+            AND EXISTS (SELECT 1 FROM target)
+          RETURNING id
+        )
+        UPDATE app_users AS user_record SET
+          role = ${nextRole}, is_active = ${nextActive},
+          password_hash = COALESCE(${updates.password_hash || null}, password_hash),
+          updated_at = NOW()
+        FROM target, guarded
+        WHERE user_record.id = target.id
+        RETURNING user_record.id, user_record.email, user_record.role, user_record.is_active
+      `;
+    } else if (addAdmin) {
+      rows = await sql`
+        WITH guarded AS (
+          UPDATE app_auth_settings SET active_admin_count = active_admin_count + 1
+          WHERE id = 1 RETURNING id
+        )
+        UPDATE app_users SET
+          role = ${nextRole}, is_active = ${nextActive},
+          password_hash = COALESCE(${updates.password_hash || null}, password_hash),
+          updated_at = NOW()
+        WHERE id = ${id} AND EXISTS (SELECT 1 FROM guarded)
+        RETURNING id, email, role, is_active
+      `;
+    } else {
+      rows = await sql`
+        UPDATE app_users SET
+          role = ${nextRole}, is_active = ${nextActive},
+          password_hash = COALESCE(${updates.password_hash || null}, password_hash),
+          updated_at = NOW()
+        WHERE id = ${id}
+        RETURNING id, email, role, is_active
+      `;
+    }
+    if (!rows[0]) return null;
+    if (updates.password_hash || updates.is_active === false) {
+      await sql`DELETE FROM app_sessions WHERE user_id = ${id}`;
+    }
+    return publicAuthUser(rows[0] as unknown as AuthUserRecord);
+  }
+
+  const db = readLocalDb();
+  const users = db.authUsers || [];
+  if (removeAdmin && users.filter((user) => user.role === 'Administrator' && user.is_active).length <= 1) {
+    throw new Error('At least one active Administrator account must remain.');
+  }
+  const updated = users.map((user) => user.id === id ? {
+    ...user,
+    role: nextRole,
+    is_active: nextActive,
+    ...(updates.password_hash ? { password_hash: updates.password_hash } : {}),
+    updated_at: new Date().toISOString(),
+  } : user);
+  db.authUsers = updated;
+  if (updates.password_hash || updates.is_active === false) {
+    db.authSessions = (db.authSessions || []).filter((session) => session.user_id !== id);
+  }
+  writeLocalDb(db);
+  const user = updated.find((item) => item.id === id);
+  return user ? publicAuthUser(user) : null;
+}
+
+async function getAuthUserWithPassword(id: string): Promise<AuthUserRecord | null> {
+  const sql = getNeonSql();
+  const rows = await sql`SELECT * FROM app_users WHERE id = ${id} LIMIT 1`;
+  return rows[0] ? rows[0] as unknown as AuthUserRecord : null;
 }
 
 // ----------------------------------------------------

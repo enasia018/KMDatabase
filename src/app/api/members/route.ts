@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import { getMembers, createMember } from '@/lib/db';
+import { authorizeApiRequest, EDITOR_ROLES } from '@/lib/auth';
 
-export async function GET() {
+export async function GET(request: Request) {
+  const authorization = await authorizeApiRequest(request);
+  if (authorization.response) return authorization.response;
   try {
     const members = await getMembers();
     return NextResponse.json(members);
@@ -11,6 +14,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const authorization = await authorizeApiRequest(request, EDITOR_ROLES);
+  if (authorization.response) return authorization.response;
   try {
     const body = await request.json();
     if (!body.full_name || typeof body.full_name !== 'string' || !body.full_name.trim()) {

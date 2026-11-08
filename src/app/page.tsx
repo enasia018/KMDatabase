@@ -1,9 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { CalendarClock, Car, CreditCard, Plus, Users } from 'lucide-react';
 import { DashboardStats, Member, Payment } from '@/lib/types';
+import { useAuthUser } from '@/lib/use-auth-user';
+import { useAutoRefresh } from '@/lib/use-auto-refresh';
 
 type Renewal = {
   memberId: string;
@@ -14,25 +16,35 @@ type Renewal = {
 };
 
 export default function DashboardPage() {
+  const { role } = useAuthUser();
+  const canEdit = role === 'Administrator' || role === 'Editor';
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    Promise.all([
+  const loadDashboard = useCallback(async () => {
+    const [statsResponse, membersResponse, paymentsResponse] = await Promise.all([
       fetch('/api/stats'),
       fetch('/api/members'),
       fetch('/api/payments'),
-    ])
-      .then(async ([statsResponse, membersResponse, paymentsResponse]) => {
-        if (statsResponse.ok) setStats(await statsResponse.json());
-        if (membersResponse.ok) setMembers(await membersResponse.json());
-        if (paymentsResponse.ok) setPayments(await paymentsResponse.json());
-      })
-      .catch((error) => console.error('Could not load dashboard records:', error))
-      .finally(() => setLoading(false));
+    ]);
+    if (statsResponse.ok) setStats(await statsResponse.json());
+    if (membersResponse.ok) setMembers(await membersResponse.json());
+    if (paymentsResponse.ok) setPayments(await paymentsResponse.json());
+    if (!statsResponse.ok || !membersResponse.ok || !paymentsResponse.ok) {
+      throw new Error('Could not load dashboard records');
+    }
+    setLoading(false);
   }, []);
+
+  useEffect(() => {
+    loadDashboard().catch((error) => {
+      console.error('Could not load dashboard records:', error);
+      setLoading(false);
+    });
+  }, [loadDashboard]);
+  useAutoRefresh(loadDashboard);
 
   const renewals: Renewal[] = members.flatMap((member) =>
     (member.units || []).flatMap((unit) => [
@@ -75,9 +87,9 @@ export default function DashboardPage() {
           <p className="text-sm text-slate-500">IDs, vehicle details, renewals, and dues in one place.</p>
         </div>
         <div className="flex gap-2">
-          <Link href="/members/new" className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white">
+          {canEdit && <Link href="/members/new" className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white">
             <Plus className="h-4 w-4" /> Add Member
-          </Link>
+          </Link>}
           <Link href="/payments" className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700">
             <CreditCard className="h-4 w-4" /> Payments
           </Link>

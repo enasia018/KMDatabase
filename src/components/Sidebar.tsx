@@ -2,20 +2,24 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useAuthUser } from '@/lib/use-auth-user';
 import {
   LayoutDashboard,
   Users,
   CreditCard,
   PlusCircle,
+  Shield,
 } from 'lucide-react';
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const { role } = useAuthUser();
 
   const navItems = [
     { label: 'Dashboard', href: '/', icon: LayoutDashboard },
     { label: 'Members & Vehicles', href: '/members', icon: Users },
     { label: 'Payments', href: '/payments', icon: CreditCard },
+    ...(role === 'Administrator' ? [{ label: 'User Accounts', href: '/users', icon: Shield }] : []),
   ];
 
   return (
@@ -45,6 +49,7 @@ export default function Sidebar() {
       </div>
 
       {/* Quick Add CTA */}
+      {role && role !== 'Viewer' && (
       <div className="px-4 pt-4 pb-2">
         <Link
           href="/members/new"
@@ -54,6 +59,7 @@ export default function Sidebar() {
           <span>New Member</span>
         </Link>
       </div>
+      )}
 
       {/* Navigation */}
       <nav className="flex-1 px-3 py-3 space-y-1">

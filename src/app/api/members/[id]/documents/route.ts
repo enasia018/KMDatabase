@@ -6,10 +6,13 @@ import {
   readDocumentFormData,
   validateDocumentUpload,
 } from '@/lib/document-upload';
+import { authorizeApiRequest, EDITOR_ROLES } from '@/lib/auth';
 
 type RouteContext = { params: Promise<{ id: string }> };
 
 export async function GET(_request: Request, { params }: RouteContext) {
+  const authorization = await authorizeApiRequest(_request);
+  if (authorization.response) return authorization.response;
   try {
     const { id } = await params;
     const member = await getMemberById(id);
@@ -22,6 +25,8 @@ export async function GET(_request: Request, { params }: RouteContext) {
 }
 
 export async function POST(request: Request, { params }: RouteContext) {
+  const authorization = await authorizeApiRequest(request, EDITOR_ROLES);
+  if (authorization.response) return authorization.response;
   try {
     const { id } = await params;
     const member = await getMemberById(id);

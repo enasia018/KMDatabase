@@ -7,7 +7,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "node --experimental-strip-types --test scripts/document-upload.test.mjs"
+    "test": "node --experimental-strip-types --test scripts/document-upload.test.mjs scripts/auth-security.test.mjs"
   },
   "keywords": [],
   "author": "",

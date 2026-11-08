@@ -1,26 +1,35 @@
 'use client';
 
-import { Suspense, useEffect, useMemo, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Plus, Search, Trash2 } from 'lucide-react';
 import { Member } from '@/lib/types';
+import { useAuthUser } from '@/lib/use-auth-user';
+import { useAutoRefresh } from '@/lib/use-auto-refresh';
 
 function MembersContent() {
   const searchParams = useSearchParams();
   const [members, setMembers] = useState<Member[]>([]);
   const [search, setSearch] = useState(searchParams.get('q') || '');
   const [loading, setLoading] = useState(true);
+  const { role } = useAuthUser();
+  const canEdit = role === 'Administrator' || role === 'Editor';
+
+  const loadMembers = useCallback(async () => {
+    const response = await fetch('/api/members');
+    if (!response.ok) throw new Error('Could not load member records');
+    setMembers(await response.json());
+    setLoading(false);
+  }, []);
 
   useEffect(() => {
-    fetch('/api/members')
-      .then(async (response) => {
-        if (!response.ok) throw new Error('Could not load member records');
-        setMembers(await response.json());
-      })
-      .catch((error) => console.error(error))
-      .finally(() => setLoading(false));
-  }, []);
+    loadMembers().catch((error) => {
+      console.error(error);
+      setLoading(false);
+    });
+  }, [loadMembers]);
+  useAutoRefresh(loadMembers);
 
   const filteredMembers = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -66,9 +75,11 @@ function MembersContent() {
           <h1 className="text-2xl font-bold text-slate-900">Members and Vehicles</h1>
           <p className="text-sm text-slate-500">Member IDs, vehicle records, and renewal dates</p>
         </div>
-        <Link href="/members/new" className="inline-flex items-center gap-2 self-start rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white">
-          <Plus className="h-4 w-4" /> Add Member
-        </Link>
+        {canEdit && (
+          <Link href="/members/new" className="inline-flex items-center gap-2 self-start rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white">
+            <Plus className="h-4 w-4" /> Add Member
+          </Link>
+        )}
       </header>
 
       <label className="relative block max-w-xl">
@@ -93,7 +104,7 @@ function MembersContent() {
                 <th className="px-4 py-3">Member / IDs</th>
                 <th className="px-4 py-3">Vehicle</th>
                 <th className="px-4 py-3">Renewals</th>
-                <th className="px-4 py-3 text-right">Actions</th>
+                <th className="px-4 py-3 text-right"> {canEdit ? 'Actions' : 'Profile'} </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -131,9 +142,11 @@ function MembersContent() {
                   </td>
                   <td className="whitespace-nowrap px-4 py-4 text-right">
                     <Link href={`/members/${member.id}`} className="mr-3 text-xs font-semibold text-sky-700 hover:underline">Open</Link>
-                    <button onClick={() => deleteMember(member)} aria-label={`Delete ${member.full_name}`} className="text-slate-400 hover:text-rose-600">
-                      <Trash2 className="inline h-4 w-4" />
-                    </button>
+                    {canEdit && (
+                      <button onClick={() => deleteMember(member)} aria-label={`Delete ${member.full_name}`} className="text-slate-400 hover:text-rose-600">
+                        <Trash2 className="inline h-4 w-4" />
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}

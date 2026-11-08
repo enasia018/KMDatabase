@@ -2,18 +2,31 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Search, Plus, Menu, X } from 'lucide-react';
+import { Search, Plus, Menu, X, LogOut } from 'lucide-react';
 import Link from 'next/link';
+import { useAuthUser } from '@/lib/use-auth-user';
 
 export default function Navbar() {
   const router = useRouter();
   const [searchTerm, setSearchTerm] = useState('');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const { user: identity, role } = useAuthUser();
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     if (searchTerm.trim()) {
       router.push(`/members?q=${encodeURIComponent(searchTerm.trim())}`);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      const response = await fetch('/api/auth/logout', { method: 'POST' });
+      if (!response.ok) throw new Error('Could not sign out. Please try again.');
+      router.replace('/login');
+      router.refresh();
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Could not sign out. Please try again.');
     }
   };
 
@@ -77,13 +90,29 @@ export default function Navbar() {
 
         {/* Right: Quick actions */}
         <div className="flex items-center gap-2">
-          <Link
-            href="/members/new"
-            className="flex items-center gap-1.5 bg-sky-600 hover:bg-sky-700 text-white text-xs sm:text-sm font-semibold py-1.5 px-3.5 rounded-lg shadow-sm transition-colors"
+          {identity && (
+            <div className="hidden text-right lg:block">
+              <p className="text-xs font-semibold text-slate-700">{identity.email}</p>
+              <p className="text-[10px] text-slate-500">{identity.role}</p>
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
           >
-            <Plus className="w-4 h-4" />
-            <span className="hidden sm:inline">Add Member</span>
-          </Link>
+            <LogOut className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Sign out</span>
+          </button>
+          {role && role !== 'Viewer' && (
+            <Link
+              href="/members/new"
+              className="flex items-center gap-1.5 bg-sky-600 hover:bg-sky-700 text-white text-xs sm:text-sm font-semibold py-1.5 px-3.5 rounded-lg shadow-sm transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              <span className="hidden sm:inline">Add Member</span>
+            </Link>
+          )}
         </div>
       </div>
 

@@ -1,12 +1,14 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, AlertCircle, Save } from 'lucide-react';
+import { useAuthUser } from '@/lib/use-auth-user';
 
 export default function NewMemberPage() {
   const router = useRouter();
+  const { role, loading: authLoading } = useAuthUser();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [member, setMember] = useState({
@@ -23,6 +25,10 @@ export default function NewMemberPage() {
     pami_renewal_date: '',
     lto_registration_renewal_date: '',
   });
+
+  useEffect(() => {
+    if (role === 'Viewer') router.replace('/members');
+  }, [role, router]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -63,6 +69,10 @@ export default function NewMemberPage() {
 
   const inputClass =
     'w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-sky-500';
+
+  if (authLoading || !role || role === 'Viewer') {
+    return <p className="p-10 text-center text-sm text-slate-500">Checking access…</p>;
+  }
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">

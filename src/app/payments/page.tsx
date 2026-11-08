@@ -1,10 +1,12 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { CreditCard, Download, Plus, Search, Trash2 } from 'lucide-react';
 import PaymentFormModal from '@/components/PaymentFormModal';
 import { Member, Payment, PaymentType } from '@/lib/types';
+import { useAuthUser } from '@/lib/use-auth-user';
+import { useAutoRefresh } from '@/lib/use-auto-refresh';
 
 const paymentTypes: PaymentType[] = [
   'Membership Fee',
@@ -19,6 +21,8 @@ const paymentTypes: PaymentType[] = [
 ];
 
 export default function PaymentsPage() {
+  const { role } = useAuthUser();
+  const canEdit = role === 'Administrator' || role === 'Editor';
   const [payments, setPayments] = useState<Payment[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [selectedMemberId, setSelectedMemberId] = useState('');
@@ -28,7 +32,7 @@ export default function PaymentsPage() {
   const [loading, setLoading] = useState(true);
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
 
-  async function loadData() {
+  const loadData = useCallback(async () => {
     const [paymentResponse, memberResponse] = await Promise.all([
       fetch('/api/payments'),
       fetch('/api/members'),
@@ -41,13 +45,14 @@ export default function PaymentsPage() {
     setPayments(paymentData);
     setMembers(memberData);
     setSelectedMemberId((current) => current || memberData[0]?.id || '');
-  }
+  }, []);
 
   useEffect(() => {
     loadData()
       .catch((error) => console.error(error))
       .finally(() => setLoading(false));
-  }, []);
+  }, [loadData]);
+  useAutoRefresh(loadData, 30_000, !paymentModalOpen);
 
   const filteredPayments = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -105,7 +110,7 @@ export default function PaymentsPage() {
           <p className="text-sm text-slate-500">Membership, franchise processing, monthly dues, GPS dues, and other payments</p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row">
-          <select
+          {canEdit && <select
             value={selectedMemberId}
             onChange={(event) => setSelectedMemberId(event.target.value)}
             className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
@@ -113,14 +118,14 @@ export default function PaymentsPage() {
           >
             <option value="">Select member</option>
             {members.map((member) => <option key={member.id} value={member.id}>{member.full_name}</option>)}
-          </select>
-          <button
+          </select>}
+          {canEdit && <button
             disabled={!selectedMemberId}
             onClick={() => setPaymentModalOpen(true)}
             className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
           >
             <Plus className="h-4 w-4" /> Record Payment
-          </button>
+          </button>}
           <button onClick={exportCsv} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700">
             <Download className="h-4 w-4" /> Export CSV
           </button>
@@ -170,7 +175,7 @@ export default function PaymentsPage() {
         ) : (
           <table className="w-full min-w-[640px] text-left text-sm">
             <thead className="bg-slate-50 text-xs uppercase text-slate-500">
-              <tr><th className="px-4 py-3">Member</th><th className="px-4 py-3">Payment type</th><th className="px-4 py-3">Date</th><th className="px-4 py-3">Amount</th><th className="px-4 py-3">Status</th><th className="px-4 py-3 text-right">Action</th></tr>
+              <tr><th className="px-4 py-3">Member</th><th className="px-4 py-3">Payment type</th><th className="px-4 py-3">Date</th><th className="px-4 py-3">Amount</th><th className="px-4 py-3">Status</th>{canEdit && <th className="px-4 py-3 text-right">Action</th>}</tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filteredPayments.map((payment) => (
@@ -180,16 +185,16 @@ export default function PaymentsPage() {
                   <td className="px-4 py-3 text-slate-600">{payment.payment_date}</td>
                   <td className="px-4 py-3 font-semibold">₱{Number(payment.amount).toLocaleString()}</td>
                   <td className="px-4 py-3">{payment.status}</td>
-                  <td className="px-4 py-3 text-right">
+                  {canEdit && <td className="px-4 py-3 text-right">
                     <button onClick={() => deletePayment(payment)} aria-label={`Delete ${payment.payment_type} payment`} className="text-slate-400 hover:text-rose-600"><Trash2 className="h-4 w-4" /></button>
-                  </td>
+                  </td>}
                 </tr>
               ))}
             </tbody>
           </table>
         )}
       </div>
-      {selectedMemberId && (
+      {canEdit && selectedMemberId && (
         <PaymentFormModal
           memberId={selectedMemberId}
           isOpen={paymentModalOpen}
