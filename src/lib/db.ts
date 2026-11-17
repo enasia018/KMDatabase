@@ -47,7 +47,29 @@ function getNeonSql() {
   if (!url) {
     throw new Error('DATABASE_URL is not set');
   }
-  return neon(url);
+  const rawSql = neon(url);
+  return async (strings: TemplateStringsArray, ...values: any[]) => {
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        return await rawSql(strings, ...values);
+      } catch (error: any) {
+        lastError = error;
+        const msg = String(error?.message || '');
+        const isTransient =
+          msg.includes('fetch failed') ||
+          msg.includes('ETIMEDOUT') ||
+          msg.includes('ECONNRESET') ||
+          msg.includes('connection') ||
+          msg.includes('concurrently updated');
+        if (!isTransient || attempt === 3) {
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 350 * attempt));
+      }
+    }
+    throw lastError;
+  };
 }
 
 // ----------------------------------------------------
@@ -785,7 +807,8 @@ export async function getMemberById(id: string): Promise<Member | null> {
 export async function createMember(
   data: Partial<Omit<Member, 'id' | 'created_at' | 'updated_at'>> & Pick<Member, 'full_name'>
 ): Promise<Member> {
-  const id = 'mem-' + Date.now();
+  const uniqueSuffix = `${Date.now()}-${randomUUID().slice(0, 6)}`;
+  const id = 'mem-' + uniqueSuffix;
   const now = new Date().toISOString();
   const fullName = data.full_name.trim();
   const nameParts = fullName.split(/\s+/);
@@ -795,7 +818,7 @@ export async function createMember(
   const newMember: Member = {
     ...data,
     id,
-    member_code: data.member_code || `KM-${new Date().getFullYear()}-${Date.now()}`,
+    member_code: data.member_code || `KM-${new Date().getFullYear()}-${uniqueSuffix}`,
     first_name: firstName,
     middle_name: data.middle_name || '',
     last_name: lastName,
@@ -963,7 +986,7 @@ export async function getUnits(): Promise<Unit[]> {
 }
 
 export async function createUnit(data: Omit<Unit, 'id' | 'created_at' | 'updated_at'>): Promise<Unit> {
-  const id = 'unit-' + Date.now();
+  const id = `unit-${Date.now()}-${randomUUID().slice(0, 6)}`;
   const now = new Date().toISOString();
   const newUnit: Unit = { ...data, id, created_at: now, updated_at: now };
 
@@ -1126,7 +1149,7 @@ export async function getPayments(): Promise<Payment[]> {
 }
 
 export async function createPayment(data: Omit<Payment, 'id' | 'created_at'>): Promise<Payment> {
-  const id = 'pay-' + Date.now();
+  const id = `pay-${Date.now()}-${randomUUID().slice(0, 6)}`;
   const now = new Date().toISOString();
   const newPayment: Payment = { ...data, id, created_at: now };
 
