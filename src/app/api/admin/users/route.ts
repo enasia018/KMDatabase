@@ -1,77 +1,53 @@
 import { NextResponse } from 'next/server';
-import { updateAuthUser } from '@/lib/db';
+import { createAuthUser, listAuthUsers } from '@/lib/db';
 import type { AppRole } from '@/lib/auth-policy';
-import {
-  authorizeApiRequest,
-  createLoginSession,
-  isValidPassword,
-  SESSION_COOKIE,
-  SESSION_DURATION_SECONDS,
-} from '@/lib/auth';
+import { authorizeApiRequest } from '@/lib/auth';
 import { hashPassword } from '@/lib/auth-crypto';
+import { isValidLoginIdentifier, isValidPassword, normalizeLoginIdentifier } from '@/lib/auth';
 
 const roles: AppRole[] = ['Administrator', 'Editor', 'Viewer'];
 
-export async function PUT(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function GET(request: Request) {
   const authorization = await authorizeApiRequest(request, ['Administrator']);
   if (authorization.response) return authorization.response;
+  try {
+    return NextResponse.json(await listAuthUsers());
+  } catch (error) {
+    console.error('Could not list accounts:', error);
+    return NextResponse.json({ error: 'Could not load accounts.' }, { status: 503 });
+  }
+}
 
-  let body: { role?: unknown; is_active?: unknown; password?: unknown };
+export async function POST(request: Request) {
+  const authorization = await authorizeApiRequest(request, ['Administrator']);
+  if (authorization.response) return authorization.response;
+  let body: { email?: unknown; password?: unknown; role?: unknown };
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json({ error: 'Invalid account update.' }, { status: 400 });
+    return NextResponse.json({ error: 'Invalid account request.' }, { status: 400 });
   }
-  const updates: { role?: AppRole; is_active?: boolean; password_hash?: string } = {};
-  if (body.role !== undefined) {
-    if (typeof body.role !== 'string' || !roles.includes(body.role as AppRole)) {
-      return NextResponse.json({ error: 'Choose Administrator, Editor, or Viewer.' }, { status: 400 });
-    }
-    updates.role = body.role as AppRole;
+  if (typeof body.email !== 'string' || typeof body.password !== 'string' ||
+      typeof body.role !== 'string') {
+    return NextResponse.json({ error: 'Email, password, and role are required.' }, { status: 400 });
   }
-  if (body.is_active !== undefined) {
-    if (typeof body.is_active !== 'boolean') {
-      return NextResponse.json({ error: 'is_active must be true or false.' }, { status: 400 });
-    }
-    updates.is_active = body.is_active;
+  const email = normalizeLoginIdentifier(body.email);
+  if (!isValidLoginIdentifier(email)) return NextResponse.json({ error: 'Enter a valid username or email address.' }, { status: 400 });
+  if (!isValidPassword(body.password)) {
+    return NextResponse.json({ error: 'Password must be 12 to 128 characters.' }, { status: 400 });
   }
-  if (body.password !== undefined) {
-    if (typeof body.password !== 'string' || !isValidPassword(body.password)) {
-      return NextResponse.json({ error: 'Password must be 12 to 128 characters.' }, { status: 400 });
-    }
-    updates.password_hash = await hashPassword(body.password);
+  if (!roles.includes(body.role as AppRole)) {
+    return NextResponse.json({ error: 'Choose Administrator, Editor, or Viewer.' }, { status: 400 });
   }
-  if (!Object.keys(updates).length) {
-    return NextResponse.json({ error: 'Provide a role, active state, or password to update.' }, { status: 400 });
-  }
-
   try {
-    const { id } = await params;
-    const user = await updateAuthUser(id, updates);
-    if (!user) {
-      return NextResponse.json({ error: 'Account was not found or the last active Administrator cannot be removed.' }, { status: 409 });
-    }
-    if (authorization.user?.id === user.id && updates.password_hash && user.is_active) {
-      const token = await createLoginSession(user);
-      const response = NextResponse.json({ user });
-      response.cookies.set(SESSION_COOKIE, token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        path: '/',
-        maxAge: SESSION_DURATION_SECONDS,
-      });
-      return response;
-    }
-    return NextResponse.json({ user });
+    const user = await createAuthUser(email, await hashPassword(body.password), body.role as AppRole);
+    return NextResponse.json({ user }, { status: 201 });
   } catch (error) {
-    if (error instanceof Error && error.message.includes('At least one active Administrator')) {
-      return NextResponse.json({ error: error.message }, { status: 409 });
-    }
-    console.error('Could not update account:', error);
-    return NextResponse.json({ error: 'Could not update account.' }, { status: 503 });
+    const duplicate = error instanceof Error && error.message.includes('already exists');
+    if (!duplicate) console.error('Could not create account:', error);
+    return NextResponse.json(
+      { error: duplicate ? error.message : 'Could not create account.' },
+      { status: duplicate ? 409 : 503 }
+    );
   }
 }
