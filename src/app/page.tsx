@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { CalendarClock, Car, CreditCard, Plus, Users } from 'lucide-react';
+import { AlertCircle, CalendarClock, Car, CreditCard, Plus, RefreshCw, Users } from 'lucide-react';
 import { DashboardStats, Member, Payment } from '@/lib/types';
 import { useAuthUser } from '@/lib/use-auth-user';
 import { useAutoRefresh } from '@/lib/use-auto-refresh';
@@ -22,19 +22,39 @@ export default function DashboardPage() {
   const [members, setMembers] = useState<Member[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const loadDashboard = useCallback(async () => {
     const [statsResponse, membersResponse, paymentsResponse] = await Promise.all([
-      fetch('/api/stats'),
-      fetch('/api/members'),
-      fetch('/api/payments'),
+      fetch('/api/stats', { cache: 'no-store' }),
+      fetch('/api/members', { cache: 'no-store' }),
+      fetch('/api/payments', { cache: 'no-store' }),
     ]);
+
+    const responses = [statsResponse, membersResponse, paymentsResponse];
+    if (responses.some((res) => res.status === 401)) {
+      window.location.href = '/login?next=%2F';
+      return;
+    }
+    if (responses.some((res) => res.status === 429)) {
+      const msg = 'Too many requests right now (hosting rate limit). Your data is safe in NeonDB—please wait a few minutes and click Retry.';
+      setLoadError(msg);
+      setLoading(false);
+      throw new Error(msg);
+    }
+
     if (statsResponse.ok) setStats(await statsResponse.json());
     if (membersResponse.ok) setMembers(await membersResponse.json());
     if (paymentsResponse.ok) setPayments(await paymentsResponse.json());
+
     if (!statsResponse.ok || !membersResponse.ok || !paymentsResponse.ok) {
-      throw new Error('Could not load dashboard records');
+      const msg = 'Could not load dashboard records. Your data is still in the database—please click Retry.';
+      setLoadError(msg);
+      setLoading(false);
+      throw new Error(msg);
     }
+
+    setLoadError(null);
     setLoading(false);
   }, []);
 
@@ -45,6 +65,16 @@ export default function DashboardPage() {
     });
   }, [loadDashboard]);
   useAutoRefresh(loadDashboard);
+
+  async function handleRetry() {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      await loadDashboard();
+    } catch (error) {
+      console.error('Retry failed:', error);
+    }
+  }
 
   const renewals: Renewal[] = members.flatMap((member) =>
     (member.units || []).flatMap((unit) => [
@@ -73,10 +103,10 @@ export default function DashboardPage() {
   }).sort((a, b) => a.date.localeCompare(b.date));
 
   const cards = [
-    { label: 'Members', value: stats?.totalMembers ?? 0, icon: Users, color: 'text-sky-700 bg-sky-50' },
-    { label: 'Vehicles', value: stats?.totalUnits ?? 0, icon: Car, color: 'text-indigo-700 bg-indigo-50' },
-    { label: 'Collected this month', value: `₱${(stats?.totalCollectedThisMonth ?? 0).toLocaleString()}`, icon: CreditCard, color: 'text-emerald-700 bg-emerald-50' },
-    { label: 'Renewals in 45 days', value: stats?.upcomingRenewalsCount ?? 0, icon: CalendarClock, color: 'text-amber-700 bg-amber-50' },
+    { label: 'Members', value: stats ? stats.totalMembers : '—', icon: Users, color: 'text-sky-700 bg-sky-50' },
+    { label: 'Vehicles', value: stats ? stats.totalUnits : '—', icon: Car, color: 'text-indigo-700 bg-indigo-50' },
+    { label: 'Collected this month', value: stats ? `₱${stats.totalCollectedThisMonth.toLocaleString()}` : '—', icon: CreditCard, color: 'text-emerald-700 bg-emerald-50' },
+    { label: 'Renewals in 45 days', value: stats ? stats.upcomingRenewalsCount : '—', icon: CalendarClock, color: 'text-amber-700 bg-amber-50' },
   ];
 
   return (
@@ -95,6 +125,22 @@ export default function DashboardPage() {
           </Link>
         </div>
       </header>
+
+      {loadError && (
+        <div className="flex flex-col justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 sm:flex-row sm:items-center">
+          <div className="flex items-start gap-2.5">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
+            <span>{loadError}</span>
+          </div>
+          <button
+            onClick={handleRetry}
+            disabled={loading}
+            className="inline-flex shrink-0 items-center gap-1.5 self-start rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-100 disabled:opacity-50 sm:self-auto"
+          >
+            <RefreshCw className="h-3.5 w-3.5" /> Retry
+          </button>
+        </div>
+      )}
 
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {cards.map(({ label, value, icon: Icon, color }) => (
