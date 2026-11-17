@@ -1,7 +1,13 @@
 import { NextResponse } from 'next/server';
 import { updateAuthUser } from '@/lib/db';
 import type { AppRole } from '@/lib/auth-policy';
-import { authorizeApiRequest, isValidPassword } from '@/lib/auth';
+import {
+  authorizeApiRequest,
+  createLoginSession,
+  isValidPassword,
+  SESSION_COOKIE,
+  SESSION_DURATION_SECONDS,
+} from '@/lib/auth';
 import { hashPassword } from '@/lib/auth-crypto';
 
 const roles: AppRole[] = ['Administrator', 'Editor', 'Viewer'];
@@ -47,6 +53,18 @@ export async function PUT(
     const user = await updateAuthUser(id, updates);
     if (!user) {
       return NextResponse.json({ error: 'Account was not found or the last active Administrator cannot be removed.' }, { status: 409 });
+    }
+    if (authorization.user?.id === user.id && updates.password_hash && user.is_active) {
+      const token = await createLoginSession(user);
+      const response = NextResponse.json({ user });
+      response.cookies.set(SESSION_COOKIE, token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        path: '/',
+        maxAge: SESSION_DURATION_SECONDS,
+      });
+      return response;
     }
     return NextResponse.json({ user });
   } catch (error) {
