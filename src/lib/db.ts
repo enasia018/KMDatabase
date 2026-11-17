@@ -19,18 +19,31 @@ import type { AppRole } from './auth-policy';
 
 const LOCAL_DB_FILE = path.join(process.cwd(), 'data', 'local-db.json');
 
+function getDatabaseUrl(): string | null {
+  const raw =
+    process.env.DATABASE_URL ||
+    process.env.NEON_DATABASE_URL ||
+    process.env.POSTGRES_URL ||
+    '';
+  const match = raw.match(/postgres(?:ql)?:\/\/[^\s'"]+/i);
+  const url = match ? match[0].trim() : raw.trim();
+  if (
+    url &&
+    (url.startsWith('postgres://') || url.startsWith('postgresql://')) &&
+    !url.includes('placeholder')
+  ) {
+    return url;
+  }
+  return null;
+}
+
 // Helper to determine if Neon Postgres is enabled
 export function isNeonConfigured(): boolean {
-  const url = process.env.DATABASE_URL;
-  return Boolean(
-    url &&
-      (url.startsWith('postgres://') || url.startsWith('postgresql://')) &&
-      !url.includes('placeholder')
-  );
+  return Boolean(getDatabaseUrl());
 }
 
 function getNeonSql() {
-  const url = process.env.DATABASE_URL;
+  const url = getDatabaseUrl();
   if (!url) {
     throw new Error('DATABASE_URL is not set');
   }
@@ -116,13 +129,54 @@ function writeLocalDb(data: LocalDbStore): void {
 // NEON DATABASE INITIALIZATION / MIGRATION
 // ----------------------------------------------------
 let neonInitialized = false;
+let neonInitPromise: Promise<{ success: boolean; message: string }> | null = null;
 
-export async function initNeonDatabase(): Promise<{ success: boolean; message: string }> {
+async function runNeonInit(forceDdl = false): Promise<{ success: boolean; message: string }> {
   if (!isNeonConfigured()) {
     return { success: false, message: 'DATABASE_URL is not configured.' };
   }
   try {
     const sql = getNeonSql();
+
+    if (!forceDdl) {
+      const check = await sql`
+        SELECT
+          to_regclass('public.members') IS NOT NULL AS has_members,
+          to_regclass('public.units') IS NOT NULL AS has_units,
+          to_regclass('public.payments') IS NOT NULL AS has_payments,
+          to_regclass('public.documents') IS NOT NULL AS has_documents,
+          to_regclass('public.app_users') IS NOT NULL AS has_users,
+          to_regclass('public.app_sessions') IS NOT NULL AS has_sessions,
+          to_regclass('public.app_auth_settings') IS NOT NULL AS has_settings,
+          EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'units'
+              AND column_name = 'lto_registration_renewal_date'
+          ) AS has_unit_columns,
+          EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'members'
+              AND column_name = 'authorized_driver_ids'
+          ) AS has_member_columns
+      `;
+      const row = check[0];
+      if (
+        row?.has_members &&
+        row?.has_units &&
+        row?.has_payments &&
+        row?.has_documents &&
+        row?.has_users &&
+        row?.has_sessions &&
+        row?.has_settings &&
+        row?.has_unit_columns &&
+        row?.has_member_columns
+      ) {
+        neonInitialized = true;
+        return { success: true, message: 'Neon PostgreSQL tables are ready!' };
+      }
+    }
 
     // 1. Members table
     await sql`
@@ -159,6 +213,9 @@ export async function initNeonDatabase(): Promise<{ success: boolean; message: s
         color TEXT,
         engine_number TEXT,
         chassis_number TEXT,
+        mv_file_number TEXT,
+        pami_renewal_date TEXT,
+        lto_registration_renewal_date TEXT,
         seating_capacity INTEGER DEFAULT 14,
         franchise_case_number TEXT,
         route_details TEXT,
@@ -249,6 +306,18 @@ export async function initNeonDatabase(): Promise<{ success: boolean; message: s
     console.error('Failed to init Neon DB:', error);
     return { success: false, message: error.message || 'Error initializing Neon DB' };
   }
+}
+
+export async function initNeonDatabase(forceDdl = false): Promise<{ success: boolean; message: string }> {
+  if (!isNeonConfigured()) {
+    return { success: false, message: 'DATABASE_URL is not configured.' };
+  }
+  if (!neonInitPromise) {
+    neonInitPromise = runNeonInit(forceDdl).finally(() => {
+      neonInitPromise = null;
+    });
+  }
+  return neonInitPromise;
 }
 
 async function ensureNeonReady() {
@@ -602,7 +671,8 @@ export async function getMembers(): Promise<Member[]> {
         documents: r.documents || [],
       }));
     } catch (e) {
-      console.error('Neon query error, falling back to local:', e);
+      console.error('Neon query error in getMembers:', e);
+      throw e;
     }
   }
 
@@ -695,7 +765,8 @@ export async function getMemberById(id: string): Promise<Member | null> {
         })),
       };
     } catch (e) {
-      console.error('Neon query error, falling back to local:', e);
+      console.error('Neon query error in getMemberById:', e);
+      throw e;
     }
   }
 
@@ -757,7 +828,8 @@ export async function createMember(
       `;
       return newMember;
     } catch (e) {
-      console.error('Neon error on createMember, saving locally:', e);
+      console.error('Neon error on createMember:', e);
+      throw e;
     }
   }
 
@@ -779,27 +851,28 @@ export async function updateMember(id: string, data: Partial<Member>): Promise<M
       const sql = getNeonSql();
       await sql`
         UPDATE members SET
-          member_code = COALESCE(${data.member_code}, member_code),
-          first_name = COALESCE(${data.first_name}, first_name),
-          middle_name = COALESCE(${data.middle_name}, middle_name),
-          last_name = COALESCE(${data.last_name}, last_name),
-          full_name = COALESCE(${data.full_name}, ${fullName}, full_name),
-          contact_number = COALESCE(${data.contact_number}, contact_number),
-          id_number = COALESCE(${data.id_number}, id_number),
-          authorized_driver_ids = COALESCE(${data.authorized_driver_ids}, authorized_driver_ids),
-          address = COALESCE(${data.address}, address),
-          email = COALESCE(${data.email}, email),
-          emergency_contact_name = COALESCE(${data.emergency_contact_name}, emergency_contact_name),
-          emergency_contact_number = COALESCE(${data.emergency_contact_number}, emergency_contact_number),
-          status = COALESCE(${data.status}, status),
-          join_date = COALESCE(${data.join_date}, join_date),
-          notes = COALESCE(${data.notes}, notes),
+          member_code = COALESCE(${data.member_code ?? null}, member_code),
+          first_name = COALESCE(${data.first_name ?? null}, first_name),
+          middle_name = COALESCE(${data.middle_name ?? null}, middle_name),
+          last_name = COALESCE(${data.last_name ?? null}, last_name),
+          full_name = COALESCE(${data.full_name ?? null}, ${fullName ?? null}, full_name),
+          contact_number = COALESCE(${data.contact_number ?? null}, contact_number),
+          id_number = COALESCE(${data.id_number ?? null}, id_number),
+          authorized_driver_ids = COALESCE(${data.authorized_driver_ids ?? null}, authorized_driver_ids),
+          address = COALESCE(${data.address ?? null}, address),
+          email = COALESCE(${data.email ?? null}, email),
+          emergency_contact_name = COALESCE(${data.emergency_contact_name ?? null}, emergency_contact_name),
+          emergency_contact_number = COALESCE(${data.emergency_contact_number ?? null}, emergency_contact_number),
+          status = COALESCE(${data.status ?? null}, status),
+          join_date = COALESCE(${data.join_date ?? null}, join_date),
+          notes = COALESCE(${data.notes ?? null}, notes),
           updated_at = NOW()
         WHERE id = ${id}
       `;
       return getMemberById(id);
     } catch (e) {
       console.error('Neon updateMember error:', e);
+      throw e;
     }
   }
 
@@ -826,6 +899,7 @@ export async function deleteMember(id: string): Promise<boolean> {
       return true;
     } catch (e) {
       console.error('Neon delete error:', e);
+      throw e;
     }
   }
 
@@ -873,6 +947,7 @@ export async function getUnits(): Promise<Unit[]> {
       }));
     } catch (e) {
       console.error('Neon getUnits error:', e);
+      throw e;
     }
   }
 
@@ -914,6 +989,7 @@ export async function createUnit(data: Omit<Unit, 'id' | 'created_at' | 'updated
       return newUnit;
     } catch (e) {
       console.error('Neon createUnit error:', e);
+      throw e;
     }
   }
 
@@ -929,26 +1005,49 @@ export async function updateUnit(id: string, data: Partial<Unit>): Promise<Unit 
     try {
       await ensureNeonReady();
       const sql = getNeonSql();
-      await sql`
+      const rows = await sql`
         UPDATE units SET
-          unit_name = COALESCE(${data.unit_name}, unit_name),
-          plate_number = COALESCE(${data.plate_number}, plate_number),
-          model_year = COALESCE(${data.model_year}, model_year),
-          color = COALESCE(${data.color}, color),
-          engine_number = COALESCE(${data.engine_number}, engine_number),
-          chassis_number = COALESCE(${data.chassis_number}, chassis_number),
-          mv_file_number = COALESCE(${data.mv_file_number}, mv_file_number),
-          seating_capacity = COALESCE(${data.seating_capacity}, seating_capacity),
-          franchise_case_number = COALESCE(${data.franchise_case_number}, franchise_case_number),
-          pami_renewal_date = COALESCE(${data.pami_renewal_date}, pami_renewal_date),
-          lto_registration_renewal_date = COALESCE(${data.lto_registration_renewal_date}, lto_registration_renewal_date),
-          route_details = COALESCE(${data.route_details}, route_details),
-          status = COALESCE(${data.status}, status),
+          unit_name = COALESCE(${data.unit_name ?? null}, unit_name),
+          plate_number = COALESCE(${data.plate_number ?? null}, plate_number),
+          model_year = COALESCE(${data.model_year ?? null}, model_year),
+          color = COALESCE(${data.color ?? null}, color),
+          engine_number = COALESCE(${data.engine_number ?? null}, engine_number),
+          chassis_number = COALESCE(${data.chassis_number ?? null}, chassis_number),
+          mv_file_number = COALESCE(${data.mv_file_number ?? null}, mv_file_number),
+          seating_capacity = COALESCE(${data.seating_capacity ?? null}, seating_capacity),
+          franchise_case_number = COALESCE(${data.franchise_case_number ?? null}, franchise_case_number),
+          pami_renewal_date = COALESCE(${data.pami_renewal_date ?? null}, pami_renewal_date),
+          lto_registration_renewal_date = COALESCE(${data.lto_registration_renewal_date ?? null}, lto_registration_renewal_date),
+          route_details = COALESCE(${data.route_details ?? null}, route_details),
+          status = COALESCE(${data.status ?? null}, status),
           updated_at = NOW()
         WHERE id = ${id}
+        RETURNING *
       `;
+      if (!rows || rows.length === 0) return null;
+      const u: any = rows[0];
+      return {
+        id: u.id,
+        member_id: u.member_id,
+        unit_name: u.unit_name,
+        plate_number: u.plate_number,
+        model_year: u.model_year,
+        color: u.color,
+        engine_number: u.engine_number,
+        chassis_number: u.chassis_number,
+        mv_file_number: u.mv_file_number || '',
+        seating_capacity: u.seating_capacity,
+        franchise_case_number: u.franchise_case_number,
+        pami_renewal_date: u.pami_renewal_date || '',
+        lto_registration_renewal_date: u.lto_registration_renewal_date || '',
+        route_details: u.route_details,
+        status: u.status,
+        created_at: u.created_at,
+        updated_at: u.updated_at,
+      };
     } catch (e) {
       console.error('Neon updateUnit error:', e);
+      throw e;
     }
   }
 
@@ -969,6 +1068,7 @@ export async function deleteUnit(id: string): Promise<boolean> {
       return true;
     } catch (e) {
       console.error('Neon deleteUnit error:', e);
+      throw e;
     }
   }
   const db = readLocalDb();
@@ -1009,6 +1109,7 @@ export async function getPayments(): Promise<Payment[]> {
       }));
     } catch (e) {
       console.error('Neon getPayments error:', e);
+      throw e;
     }
   }
 
@@ -1048,6 +1149,7 @@ export async function createPayment(data: Omit<Payment, 'id' | 'created_at'>): P
       return newPayment;
     } catch (e) {
       console.error('Neon createPayment error:', e);
+      throw e;
     }
   }
 
@@ -1066,6 +1168,7 @@ export async function deletePayment(id: string): Promise<boolean> {
       return true;
     } catch (e) {
       console.error('Neon deletePayment error:', e);
+      throw e;
     }
   }
   const db = readLocalDb();
@@ -1104,6 +1207,7 @@ export async function getDocuments(): Promise<DocumentAttachment[]> {
       }));
     } catch (e) {
       console.error('Neon getDocuments error:', e);
+      throw e;
     }
   }
 
@@ -1143,6 +1247,7 @@ export async function getMemberDocuments(memberId: string): Promise<DocumentAtta
       }));
     } catch (error) {
       console.error('Neon getMemberDocuments error:', error);
+      throw error;
     }
   }
   return readLocalDb().documents
@@ -1179,6 +1284,7 @@ export async function getMemberDocument(
       };
     } catch (error) {
       console.error('Neon getMemberDocument error:', error);
+      throw error;
     }
   }
 
@@ -1213,6 +1319,7 @@ export async function createDocument(
       return metadata;
     } catch (e) {
       console.error('Neon createDocument error:', e);
+      throw e;
     }
   }
 
@@ -1234,6 +1341,7 @@ export async function deleteDocument(id: string, memberId: string): Promise<bool
       return rows.length > 0;
     } catch (e) {
       console.error('Neon deleteDocument error:', e);
+      throw e;
     }
   }
   const db = readLocalDb();
