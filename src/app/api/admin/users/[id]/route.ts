@@ -36,6 +36,7 @@ export async function PUT(
     if (typeof body.password !== 'string' || !isValidPassword(body.password)) {
       return NextResponse.json({ error: 'Password must be 12 to 128 characters.' }, { status: 400 });
     }
+    updates.password_hash = await hashPassword(body.password);
   }
   if (!Object.keys(updates).length) {
     return NextResponse.json({ error: 'Provide a role, active state, or password to update.' }, { status: 400 });
@@ -43,9 +44,6 @@ export async function PUT(
 
   try {
     const { id } = await params;
-    if (typeof body.password === 'string') {
-      updates.password_hash = await hashPassword(body.password);
-    }
     const user = await updateAuthUser(id, updates);
     if (!user) {
       return NextResponse.json({ error: 'Account was not found or the last active Administrator cannot be removed.' }, { status: 409 });
