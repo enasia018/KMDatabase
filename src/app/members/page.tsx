@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { Plus, Search, Trash2 } from 'lucide-react';
+import { AlertCircle, Plus, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { Member } from '@/lib/types';
 import { useAuthUser } from '@/lib/use-auth-user';
 import { useAutoRefresh } from '@/lib/use-auto-refresh';
@@ -13,13 +13,36 @@ function MembersContent() {
   const [members, setMembers] = useState<Member[]>([]);
   const [search, setSearch] = useState(searchParams.get('q') || '');
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const { role } = useAuthUser();
   const canEdit = role === 'Administrator' || role === 'Editor';
 
   const loadMembers = useCallback(async () => {
-    const response = await fetch('/api/members');
-    if (!response.ok) throw new Error('Could not load member records');
+    const response = await fetch('/api/members', { cache: 'no-store' });
+    if (response.status === 401) {
+      window.location.href = '/login?next=%2Fmembers';
+      return;
+    }
+    if (response.status === 429) {
+      const msg = 'Too many requests right now (hosting rate limit). Your data is safe in NeonDB—please wait a few minutes and click Retry.';
+      setLoadError(msg);
+      setLoading(false);
+      throw new Error(msg);
+    }
+    if (!response.ok) {
+      let detail = 'Could not load member records. Your data is still in the database—please click Retry.';
+      try {
+        const body = await response.json();
+        if (body?.error) detail = body.error;
+      } catch {
+        // Response was not JSON
+      }
+      setLoadError(detail);
+      setLoading(false);
+      throw new Error(detail);
+    }
     setMembers(await response.json());
+    setLoadError(null);
     setLoading(false);
   }, []);
 
@@ -58,9 +81,23 @@ function MembersContent() {
     });
   }, [members, search]);
 
+  async function handleRetry() {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      await loadMembers();
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
   async function deleteMember(member: Member) {
     if (!confirm(`Delete the record for ${member.full_name}?`)) return;
     const response = await fetch(`/api/members/${member.id}`, { method: 'DELETE' });
+    if (response.status === 401) {
+      window.location.href = '/login?next=%2Fmembers';
+      return;
+    }
     if (!response.ok) {
       alert('Could not delete the member record.');
       return;
@@ -82,6 +119,22 @@ function MembersContent() {
         )}
       </header>
 
+      {loadError && (
+        <div className="flex flex-col justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 sm:flex-row sm:items-center">
+          <div className="flex items-start gap-2.5">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
+            <span>{loadError}</span>
+          </div>
+          <button
+            onClick={handleRetry}
+            disabled={loading}
+            className="inline-flex shrink-0 items-center gap-1.5 self-start rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-100 disabled:opacity-50 sm:self-auto"
+          >
+            <RefreshCw className="h-3.5 w-3.5" /> Retry
+          </button>
+        </div>
+      )}
+
       <label className="relative block max-w-xl">
         <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
         <input
@@ -95,6 +148,8 @@ function MembersContent() {
       <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
         {loading ? (
           <p className="p-10 text-center text-sm text-slate-500">Loading records…</p>
+        ) : loadError && members.length === 0 ? (
+          <p className="p-10 text-center text-sm text-rose-600">Unable to load records right now. Click Retry above.</p>
         ) : filteredMembers.length === 0 ? (
           <p className="p-10 text-center text-sm text-slate-500">No matching member records.</p>
         ) : (
