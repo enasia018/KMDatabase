@@ -18,6 +18,10 @@ export default function NewMemberPage() {
   });
   const [vehicle, setVehicle] = useState({
     plate_number: '',
+    make: '',
+    series: '',
+    body_type: '',
+    model_year: '',
     engine_number: '',
     chassis_number: '',
     mv_file_number: '',
@@ -131,6 +135,10 @@ export default function NewMemberPage() {
           <div className="grid gap-4 sm:grid-cols-2">
             {([
               ['plate_number', 'Plate Number *'],
+              ['make', 'Make'],
+              ['series', 'Series'],
+              ['body_type', 'Body Type'],
+              ['model_year', 'Year Model'],
               ['engine_number', 'Engine Number'],
               ['chassis_number', 'Chassis Number'],
               ['mv_file_number', 'MV File Number'],
