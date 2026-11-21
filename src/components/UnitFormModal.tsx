@@ -15,6 +15,10 @@ interface UnitFormModalProps {
 type VehicleForm = Pick<
   Unit,
   | 'plate_number'
+  | 'make'
+  | 'series'
+  | 'body_type'
+  | 'model_year'
   | 'engine_number'
   | 'chassis_number'
   | 'mv_file_number'
@@ -25,6 +29,10 @@ type VehicleForm = Pick<
 
 const emptyForm: VehicleForm = {
   plate_number: '',
+  make: '',
+  series: '',
+  body_type: '',
+  model_year: '',
   engine_number: '',
   chassis_number: '',
   mv_file_number: '',
@@ -35,6 +43,10 @@ const emptyForm: VehicleForm = {
 
 const fields: Array<{ key: keyof VehicleForm; label: string; date?: boolean }> = [
   { key: 'plate_number', label: 'Plate Number' },
+  { key: 'make', label: 'Make' },
+  { key: 'series', label: 'Series' },
+  { key: 'body_type', label: 'Body Type' },
+  { key: 'model_year', label: 'Year Model' },
   { key: 'engine_number', label: 'Engine Number' },
   { key: 'chassis_number', label: 'Chassis Number' },
   { key: 'mv_file_number', label: 'MV File Number' },
@@ -57,6 +69,10 @@ export default function UnitFormModal({
     if (!isOpen) return;
     setForm({
       plate_number: initialUnit?.plate_number || '',
+      make: initialUnit?.make || '',
+      series: initialUnit?.series || '',
+      body_type: initialUnit?.body_type || '',
+      model_year: initialUnit?.model_year || '',
       engine_number: initialUnit?.engine_number || '',
       chassis_number: initialUnit?.chassis_number || '',
       mv_file_number: initialUnit?.mv_file_number || '',
