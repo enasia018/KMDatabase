@@ -60,6 +60,10 @@ function MembersContent() {
     return members.filter((member) => {
       const vehicleValues = (member.units || []).flatMap((unit) => [
         unit.plate_number,
+        unit.make,
+        unit.series,
+        unit.body_type,
+        unit.model_year,
         unit.engine_number,
         unit.chassis_number,
         unit.mv_file_number,
@@ -140,7 +144,7 @@ function MembersContent() {
         <input
           value={search}
           onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search name, ID, plate, engine, chassis, MV file, or case number"
+          placeholder="Search name, ID, plate, make, series, body type, year, engine, chassis, MV file, or case"
           className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm outline-none focus:border-sky-500"
         />
       </label>
@@ -182,6 +186,9 @@ function MembersContent() {
                     ) : member.units?.map((unit) => (
                       <div key={unit.id} className="mb-2 last:mb-0">
                         <p className="font-semibold text-slate-800">{unit.plate_number}</p>
+                        <p className="text-xs text-slate-500">
+                          Make: {unit.make || '—'} · Series: {unit.series || '—'} · Body: {unit.body_type || '—'} · Year: {unit.model_year || '—'}
+                        </p>
                         <p className="text-xs text-slate-500">Engine: {unit.engine_number || '—'} · Chassis: {unit.chassis_number || '—'}</p>
                         <p className="text-xs text-slate-500">MV file: {unit.mv_file_number || '—'} · Case: {unit.franchise_case_number || '—'}</p>
                       </div>
