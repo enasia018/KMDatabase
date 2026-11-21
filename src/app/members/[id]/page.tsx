@@ -187,7 +187,7 @@ export default function MemberDetailPage({ params }: { params: Promise<{ id: str
         <div className="flex items-center justify-between">
           <div>
             <h2 className="flex items-center gap-2 font-semibold text-slate-900"><Car className="h-4 w-4" /> Vehicle and renewals</h2>
-            <p className="text-xs text-slate-500">Plate, engine, chassis, MV file, case, PAMI, and LTO details</p>
+            <p className="text-xs text-slate-500">Plate, make, series, body type, year model, engine, chassis, MV file, case, PAMI, and LTO details</p>
           </div>
           {canEdit && <button onClick={() => { setEditingUnit(null); setUnitModalOpen(true); }} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white">
             <Plus className="h-4 w-4" /> Add Vehicle
@@ -207,6 +207,10 @@ export default function MemberDetailPage({ params }: { params: Promise<{ id: str
                   </div>}
                 </div>
                 <dl className="grid grid-cols-2 gap-3 text-xs">
+                  <div><dt className="text-slate-500">Make</dt><dd className="font-medium">{unit.make || '—'}</dd></div>
+                  <div><dt className="text-slate-500">Series</dt><dd className="font-medium">{unit.series || '—'}</dd></div>
+                  <div><dt className="text-slate-500">Body type</dt><dd className="font-medium">{unit.body_type || '—'}</dd></div>
+                  <div><dt className="text-slate-500">Year model</dt><dd className="font-medium">{unit.model_year || '—'}</dd></div>
                   <div><dt className="text-slate-500">Engine</dt><dd className="font-medium">{unit.engine_number || '—'}</dd></div>
                   <div><dt className="text-slate-500">Chassis</dt><dd className="font-medium">{unit.chassis_number || '—'}</dd></div>
                   <div><dt className="text-slate-500">MV file</dt><dd className="font-medium">{unit.mv_file_number || '—'}</dd></div>
