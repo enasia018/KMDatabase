@@ -170,11 +170,11 @@ async function runNeonInit(forceDdl = false): Promise<{ success: boolean; messag
           to_regclass('public.app_users') IS NOT NULL AS has_users,
           to_regclass('public.app_sessions') IS NOT NULL AS has_sessions,
           to_regclass('public.app_auth_settings') IS NOT NULL AS has_settings,
-          EXISTS (
-            SELECT 1 FROM information_schema.columns
+          (
+            SELECT COUNT(*) = 4 FROM information_schema.columns
             WHERE table_schema = 'public'
               AND table_name = 'units'
-              AND column_name = 'lto_registration_renewal_date'
+              AND column_name IN ('lto_registration_renewal_date', 'make', 'series', 'body_type')
           ) AS has_unit_columns,
           EXISTS (
             SELECT 1 FROM information_schema.columns
@@ -231,6 +231,9 @@ async function runNeonInit(forceDdl = false): Promise<{ success: boolean; messag
         member_id TEXT REFERENCES members(id) ON DELETE CASCADE,
         unit_name TEXT NOT NULL,
         plate_number TEXT NOT NULL,
+        make TEXT,
+        series TEXT,
+        body_type TEXT,
         model_year TEXT,
         color TEXT,
         engine_number TEXT,
@@ -249,6 +252,10 @@ async function runNeonInit(forceDdl = false): Promise<{ success: boolean; messag
 
     await sql`ALTER TABLE members ADD COLUMN IF NOT EXISTS id_number TEXT`;
     await sql`ALTER TABLE members ADD COLUMN IF NOT EXISTS authorized_driver_ids TEXT`;
+    await sql`ALTER TABLE units ADD COLUMN IF NOT EXISTS make TEXT`;
+    await sql`ALTER TABLE units ADD COLUMN IF NOT EXISTS series TEXT`;
+    await sql`ALTER TABLE units ADD COLUMN IF NOT EXISTS body_type TEXT`;
+    await sql`ALTER TABLE units ADD COLUMN IF NOT EXISTS model_year TEXT`;
     await sql`ALTER TABLE units ADD COLUMN IF NOT EXISTS mv_file_number TEXT`;
     await sql`ALTER TABLE units ADD COLUMN IF NOT EXISTS pami_renewal_date TEXT`;
     await sql`ALTER TABLE units ADD COLUMN IF NOT EXISTS lto_registration_renewal_date TEXT`;
@@ -743,7 +750,10 @@ export async function getMemberById(id: string): Promise<Member | null> {
           member_id: u.member_id,
           unit_name: u.unit_name,
           plate_number: u.plate_number,
-          model_year: u.model_year,
+          make: u.make || '',
+          series: u.series || '',
+          body_type: u.body_type || '',
+          model_year: u.model_year || '',
           color: u.color,
           engine_number: u.engine_number,
           chassis_number: u.chassis_number,
@@ -952,7 +962,10 @@ export async function getUnits(): Promise<Unit[]> {
         member_id: u.member_id,
         unit_name: u.unit_name,
         plate_number: u.plate_number,
-        model_year: u.model_year,
+        make: u.make || '',
+        series: u.series || '',
+        body_type: u.body_type || '',
+        model_year: u.model_year || '',
         color: u.color,
         engine_number: u.engine_number,
         chassis_number: u.chassis_number,
@@ -996,11 +1009,12 @@ export async function createUnit(data: Omit<Unit, 'id' | 'created_at' | 'updated
       const sql = getNeonSql();
       await sql`
         INSERT INTO units (
-          id, member_id, unit_name, plate_number, model_year, color,
+          id, member_id, unit_name, plate_number, make, series, body_type, model_year, color,
           engine_number, chassis_number, seating_capacity, franchise_case_number,
           mv_file_number, pami_renewal_date, lto_registration_renewal_date, route_details, status
         ) VALUES (
           ${newUnit.id}, ${newUnit.member_id}, ${newUnit.unit_name}, ${newUnit.plate_number},
+          ${newUnit.make || ''}, ${newUnit.series || ''}, ${newUnit.body_type || ''},
           ${newUnit.model_year || ''}, ${newUnit.color || ''}, ${newUnit.engine_number || ''},
           ${newUnit.chassis_number || ''}, ${newUnit.seating_capacity || 14},
           ${newUnit.franchise_case_number || ''}, ${newUnit.mv_file_number || ''},
@@ -1032,6 +1046,9 @@ export async function updateUnit(id: string, data: Partial<Unit>): Promise<Unit 
         UPDATE units SET
           unit_name = COALESCE(${data.unit_name ?? null}, unit_name),
           plate_number = COALESCE(${data.plate_number ?? null}, plate_number),
+          make = COALESCE(${data.make ?? null}, make),
+          series = COALESCE(${data.series ?? null}, series),
+          body_type = COALESCE(${data.body_type ?? null}, body_type),
           model_year = COALESCE(${data.model_year ?? null}, model_year),
           color = COALESCE(${data.color ?? null}, color),
           engine_number = COALESCE(${data.engine_number ?? null}, engine_number),
@@ -1054,7 +1071,10 @@ export async function updateUnit(id: string, data: Partial<Unit>): Promise<Unit 
         member_id: u.member_id,
         unit_name: u.unit_name,
         plate_number: u.plate_number,
-        model_year: u.model_year,
+        make: u.make || '',
+        series: u.series || '',
+        body_type: u.body_type || '',
+        model_year: u.model_year || '',
         color: u.color,
         engine_number: u.engine_number,
         chassis_number: u.chassis_number,
@@ -1445,11 +1465,12 @@ export async function seedOrMigrateToNeon(): Promise<{ success: boolean; count: 
   for (const u of db.units) {
     await sql`
       INSERT INTO units (
-        id, member_id, unit_name, plate_number, model_year, color,
+        id, member_id, unit_name, plate_number, make, series, body_type, model_year, color,
         engine_number, chassis_number, seating_capacity, franchise_case_number,
         mv_file_number, pami_renewal_date, lto_registration_renewal_date, route_details, status
       ) VALUES (
-        ${u.id}, ${u.member_id}, ${u.unit_name}, ${u.plate_number}, ${u.model_year || ''},
+        ${u.id}, ${u.member_id}, ${u.unit_name}, ${u.plate_number},
+        ${u.make || ''}, ${u.series || ''}, ${u.body_type || ''}, ${u.model_year || ''},
         ${u.color || ''}, ${u.engine_number || ''}, ${u.chassis_number || ''},
         ${u.seating_capacity || 14}, ${u.franchise_case_number || ''}, ${u.mv_file_number || ''},
         ${u.pami_renewal_date || null}, ${u.lto_registration_renewal_date || null},

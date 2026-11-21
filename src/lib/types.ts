@@ -67,6 +67,9 @@ export interface Unit {
   member_id: string;
   unit_name: string; // e.g. Toyota HiAce Grandia, Nissan Urvan
   plate_number: string; // e.g. NAA 1234
+  make?: string;
+  series?: string;
+  body_type?: string;
   model_year?: string;
   color?: string;
   engine_number?: string;
